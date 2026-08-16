@@ -17,6 +17,11 @@ class Settings(BaseSettings):
     chroma_path: Path = Path("storage/chroma")
     log_level: str = "INFO"
 
+    # LLM Provider Configuration
+    llm_provider: str = "local"
+    llm_base_url: str = "http://127.0.0.1:8080/v1"
+    llm_model: str = "local-model"
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

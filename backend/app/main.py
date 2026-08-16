@@ -6,6 +6,7 @@ from typing import AsyncIterator
 from fastapi import FastAPI
 from sqlalchemy import text
 
+from backend.app.api.chat import router as chat_router
 from backend.app.api.conversations import router as conversations_router
 from backend.app.api.health import router as health_router
 from backend.app.api.imports import router as imports_router
@@ -58,6 +59,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.embedding_provider = embedding_provider
     app.state.vector_store = vector_store
     app.include_router(health_router)
+    app.include_router(chat_router)
     app.include_router(people_router)
     app.include_router(memories_router)
     app.include_router(conversations_router)
