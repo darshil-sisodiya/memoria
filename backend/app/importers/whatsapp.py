@@ -11,10 +11,12 @@ from datetime import datetime
 class ParsedWhatsAppMessage:
     """A message parsed from one WhatsApp header and its continuation lines."""
 
-    timestamp: datetime
+    timestamp: datetime | None
     sender: str
     content: str
     line_number: int
+    is_media: bool = False
+    is_system: bool = False
 
 
 @dataclass(frozen=True)
@@ -86,26 +88,42 @@ class WhatsAppParser:
 
         for line_number, raw_line in enumerate(text.splitlines(), start=1):
             line = raw_line.rstrip("\r")
+            
+            if "end-to-end encrypted" in line:
+                if current is not None:
+                    messages.append(self._finish_message(current))
+                current = {
+                    "timestamp": None,
+                    "sender": "",
+                    "content": line.strip(),
+                    "line_number": line_number,
+                    "is_system": True,
+                }
+                continue
+
             header = self._parse_header(line, date_order)
             if header is not None:
                 if current is not None:
                     messages.append(self._finish_message(current))
-                timestamp, sender, content = header
-                if not sender:
-                    skipped_lines += 1
-                    current = None
-                    continue
+                timestamp, sender, content, is_system = header
                 current = {
                     "timestamp": timestamp,
                     "sender": sender,
                     "content": content,
                     "line_number": line_number,
+                    "is_system": is_system,
                 }
                 continue
 
             if current is None:
                 if line.strip():
-                    skipped_lines += 1
+                    current = {
+                        "timestamp": None,
+                        "sender": "",
+                        "content": line.strip(),
+                        "line_number": line_number,
+                        "is_system": True,
+                    }
                 continue
 
             current["content"] = f"{current['content']}\n{line}"
@@ -115,7 +133,7 @@ class WhatsAppParser:
 
         return WhatsAppParseResult(messages=messages, skipped_lines=skipped_lines)
 
-    def _parse_header(self, line: str, date_order: str) -> tuple[datetime, str, str] | None:
+    def _parse_header(self, line: str, date_order: str) -> tuple[datetime | None, str, str, bool] | None:
         for pattern in self._header_patterns:
             match = pattern.match(line)
             if match is None:
@@ -126,16 +144,16 @@ class WhatsAppParser:
                 continue
 
             body = match.group("body")
-            if ":" not in body:
-                # Timestamped call/system records have no sender/message.
-                # Recognize them so they do not become continuations of the
-                # preceding chat message.
-                return timestamp, "", ""
-            sender, content = body.split(":", maxsplit=1)
-            sender = sender.strip()
-            if not sender:
-                return None
-            return timestamp, sender, content.lstrip()
+            if body.startswith("- "):
+                return timestamp, "", body[2:].lstrip(), True
+            elif ":" in body:
+                sender, content = body.split(":", maxsplit=1)
+                sender = sender.strip()
+                if not sender:
+                    return timestamp, "", content.lstrip(), True
+                return timestamp, sender, content.lstrip(), False
+            else:
+                return timestamp, "", body.lstrip(), True
         return None
 
     def _parse_timestamp(self, date_part: str, time_part: str, date_order: str) -> datetime | None:
@@ -194,11 +212,27 @@ class WhatsAppParser:
 
     @staticmethod
     def _finish_message(raw: dict[str, object]) -> ParsedWhatsAppMessage:
+        content = str(raw["content"])
+        sender = str(raw["sender"])
+        is_system = bool(raw.get("is_system"))
+        
+        media_placeholders = {
+            "<Media omitted>", "image omitted", "video omitted", 
+            "sticker omitted", "audio omitted", "document omitted", 
+            "GIF omitted", "‎image omitted", "[Call]"
+        }
+        is_media = content.strip() in media_placeholders
+        
+        if not sender:
+            is_system = True
+
         return ParsedWhatsAppMessage(
-            timestamp=raw["timestamp"],  # type: ignore[arg-type]
-            sender=str(raw["sender"]),
-            content=str(raw["content"]),
+            timestamp=raw.get("timestamp"),  # type: ignore[arg-type]
+            sender=sender,
+            content=content,
             line_number=int(raw["line_number"]),
+            is_media=is_media,
+            is_system=is_system,
         )
 
 
