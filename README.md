@@ -2,23 +2,53 @@
 
 Memoria AI is a local-first memory companion. The project is being built incrementally, with SQLite as the structured-data source of truth and model providers kept behind replaceable interfaces.
 
-## Current milestone: Phase 1
+## Development Model
 
-This milestone contains only the initial backend setup:
+The core philosophy of Memoria AI is **local-first** and **privacy-first**:
+- Model files (GGUFs) are kept outside the source repository.
+- Inference is handled locally by `llama-server` running outside of the Memoria application.
+- Memoria communicates with the local model over localhost.
+- SQLite is the current source of truth for all imported messages and conversational data.
+- ChromaDB semantic retrieval and memory extraction are planned/future work.
+- **No cloud inference or telemetry is used** for the current local LLM path.
 
-- FastAPI application
-- SQLite and SQLAlchemy 2.x configuration
-- Alembic migration setup
-- Initial database models
-- `GET /api/health`
-- People, memory, and conversation persistence APIs
-- WhatsApp `.txt` import with multiline-message parsing
-- Deterministic local embeddings and persistent ChromaDB indexing
-- Synthetic health, CRUD, parser, and import tests
+## Current Architecture
 
-The frontend, ChromaDB, RAG pipeline, and LLM providers are intentionally not implemented yet.
+The current implementation bridges WhatsApp chat preservation with basic local LLM inference. These two pathways (WhatsApp importing and LLM interaction) are fully functional independently, but are not yet fully connected via RAG.
 
-RAG retrieval, LLM providers, and the frontend are still deferred; the embedding and vector-store layer is now available as part of the current backend milestone.
+```text
+                    MEMORIA
+
+       WhatsApp TXT export
+                |
+                v
+       WhatsApp Parser
+                |
+                v
+          ImportService
+                |
+                v
+             SQLite
+                |
+                |       FUTURE
+                |-----> Embeddings
+                |          |
+                |          v
+                |       ChromaDB
+                |          |
+                |          v
+                |       Retrieval
+                |
+                |
+Memoria API ---> LocalLlamaProvider
+                       |
+                       | HTTP
+                       v
+                  llama-server
+                       |
+                       v
+                   GGUF Model
+```
 
 ## Requirements
 
@@ -37,7 +67,52 @@ python -m pip install -r backend\requirements.txt
 alembic -c backend\alembic.ini upgrade head
 ```
 
+## How to Start `llama-server`
+
+Memoria does not directly load the GGUF model binary. Inference must be provided by a local instance of `llama-server` (from the `llama.cpp` project), which should be started separately.
+
+Start the server using a command similar to:
+
+```powershell
+llama-server.exe ^
+  -m "D:\path\to\your\model.gguf" ^
+  -ngl 999 ^
+  --ctx-size 2048 ^
+  --port 8080
+```
+
+- Replace the model path with the actual location of your GGUF model (which does not need to be inside the Memoria repository).
+- `-ngl 999` enables maximum GPU offloading when supported by your hardware.
+- `--ctx-size` controls the context window size.
+- `--port` determines the local HTTP port the server binds to.
+
+## Configuration
+
+The backend uses local defaults and can be configured with environment variables:
+
+- `DATABASE_URL` (default: `sqlite:///./storage/memoria.db`)
+- `DATA_PATH` (default: `data`)
+- `MODELS_PATH` (default: `models`)
+- `STORAGE_PATH` (default: `storage`)
+- `CHROMA_PATH` (default: `storage/chroma`)
+- `LOG_LEVEL` (default: `INFO`)
+
+**Local LLM Configuration:**
+- `LLM_PROVIDER` (default: `local`)
+- `LLM_BASE_URL` (default: `http://127.0.0.1:8080/v1`)
+- `LLM_MODEL` (default: `local-model`)
+
+These are fully configurable. For example, if you run your `llama-server` on port 9000 instead of 8080, you can configure Memoria accordingly:
+
+```powershell
+$env:LLM_BASE_URL="http://127.0.0.1:9000/v1"
+```
+
+The model server and Memoria must use matching ports.
+
 ## Run the backend
+
+Start Memoria via Uvicorn:
 
 ```powershell
 python -m uvicorn backend.app.main:app --reload
@@ -60,9 +135,99 @@ GET    /api/conversations?person_id={id}
 POST   /api/conversations
 GET    /api/conversations/{id}
 POST   /api/import/whatsapp
+POST   /api/chat
 ```
 
 The WhatsApp import endpoint accepts a multipart form with `person_id` and a `.txt` file. It supports common dash and bracketed headers, preserves multiline messages, and stores imported rows in SQLite with `source="whatsapp"`.
+
+## Swagger UI / API Testing
+
+Memoria currently exposes a development chat endpoint (`POST /api/chat`) that can be tested directly without a frontend using the FastAPI Swagger UI.
+
+**Testing Sequence:**
+1. Start `llama-server` on your chosen port.
+2. Start the Memoria backend.
+3. Open http://127.0.0.1:8000/docs
+4. Find the `POST /api/chat` endpoint and click "Try it out".
+5. Submit a request using a payload like:
+
+```json
+{
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are Darshil."
+    },
+    {
+      "role": "user",
+      "content": "Hello!"
+    }
+  ],
+  "temperature": 0.7
+}
+```
+6. Inspect the generated response. 
+
+*Note: This endpoint currently only forwards the supplied messages to the configured local LLM provider. It does NOT perform memory retrieval or RAG integration yet.*
+
+## WhatsApp Importer
+
+Memoria contains a canonical, highly-tested WhatsApp importer. The importer supports:
+- Standard WhatsApp TXT exports
+- Chronological message preservation
+- Sender names and timestamps
+- Multiline messages
+- Unicode and emojis
+- Media placeholders
+- System messages, encryption notices, and malformed/unrecognized opening system records
+
+The parser processes the export into structured `ParsedWhatsAppMessage` records, which are passed through Memoria's `ImportService` directly into SQLite. SQLite serves as the source of truth for imported conversation data.
+
+*(Note: The standalone Finetuning parser project has been fully migrated into this repository and is no longer an active dependency).*
+
+### Verified Import Results
+
+The migrated parser has been verified against the original Finetuner baseline and produced matching results, successfully passing through the `ImportService` into SQLite with no missing or duplicate messages:
+- Input lines: 24,174
+- Parsed messages: 19,669
+- Multiline messages: 204
+- System messages: 10
+- Media placeholders: 7
+- Unique speakers: 4
+- Earliest timestamp: 2025-05-26 19:29:05
+- Latest timestamp: 2026-08-14 23:06:44
+
+### Test Fixture
+
+The real WhatsApp export used for regression testing is stored at:
+`backend/tests/data/whatsapp/chat.txt`
+
+This fixture allows the parser to be tested against a real-world WhatsApp export format. 
+
+> **IMPORTANT PRIVACY NOTE:**
+> Real WhatsApp exports contain private conversations and personal information. The repository should remain private if real conversation data is included, and sensitive chat exports must never be committed to a public repository.
+
+## Local LLM Provider Design
+
+Memoria interacts with `llama-server` via a `LocalLlamaProvider` which implements the base `LLMProvider` abstraction. This abstraction exists so that the rest of Memoria does not need to be tightly coupled to `llama.cpp`. 
+
+The provider utilizes `httpx` to communicate with the OpenAI-compatible HTTP API (`/v1`) exposed by `llama-server`. (We intentionally do not use `llama-cpp-python` for this integration).
+
+Current provider responsibilities include:
+- Health checking the local server
+- Sending chat completion requests
+- Parsing generated responses
+- Handling connection failures
+- Handling timeouts
+- Handling HTTP errors
+- Handling malformed/empty responses
+
+## Experimental Local Fine-Tuned Model
+
+Alongside the Memoria project, experimental fine-tuning work has been conducted. The initial experiment utilized:
+`Qwen2.5-3B-Instruct` + `QLoRA` + `WhatsApp conversation dataset` + `Unsloth Studio`.
+
+The resulting fine-tuned model was exported to GGUF format and is successfully being tested through `llama-server` using Memoria's `LocalLlamaProvider`. This experimental result demonstrated recognizable conversational style changes compared to the base Qwen model (e.g., shorter responses, slang usage, emoji/sticker behavioral quirks). Note that this is an experimental result, not a claim that the model perfectly reproduces a person's identity or personality.
 
 ## Run tests
 
@@ -70,16 +235,12 @@ The WhatsApp import endpoint accepts a multipart form with `person_id` and a `.t
 python -m pytest backend/tests -q
 ```
 
-## Configuration
-
-The backend uses local defaults and can be configured with environment variables:
-
-- `DATABASE_URL` (default: `sqlite:///./storage/memoria.db`)
-- `DATA_PATH` (default: `data`)
-- `MODELS_PATH` (default: `models`)
-- `STORAGE_PATH` (default: `storage`)
-- `CHROMA_PATH` (default: `storage/chroma`)
-- `LOG_LEVEL` (default: `INFO`)
+**Current verified state (25 tests total):**
+- WhatsApp parser tests: 6/6 pass
+- LocalLlamaProvider tests pass
+- Full Memoria test suite: 25/25 pass
+- ImportService successfully imports all records cleanly to SQLite
+- Local inference integration has been manually verified through `/api/chat`
 
 ## Embeddings and ChromaDB
 
@@ -87,6 +248,19 @@ The backend keeps SQLite as the source of truth. A local `MockEmbeddingProvider`
 
 Messages are stored in the `messages` collection and memories in the `memories` collection. Each vector includes SQLite references such as `source_type`, `source_id`, `person_id`, and `timestamp`.
 
-The mock provider can later be replaced by a local embedding model without changing the import, memory, or retrieval services.
+The mock provider can later be replaced by a local embedding model without changing the import, memory, or retrieval services. No cloud AI service or telemetry is used.
 
-No cloud AI service or telemetry is used.
+## Roadmap & Planned Features
+
+The following features are **FUTURE/PLANNED** work and are not currently implemented:
+- Connecting WhatsApp memories to chat generation
+- Real embedding pipeline
+- ChromaDB semantic retrieval
+- Memory extraction
+- Context builder (combining retrieved memories with recent conversation)
+- Automatic model management
+- Desktop frontend
+- Mobile application
+- Packaging/distribution
+- Raspberry Pi deployment
+- Multimodal memory such as images/stickers/voice
