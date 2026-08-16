@@ -1,0 +1,26 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+.env
+
+# Local application data and model files must never be committed.
+data/*
+!data/.gitkeep
+models/*
+!models/.gitkeep
+storage/*
+!storage/.gitkeep
+*.db
+*.sqlite
+*.sqlite3
+*.log
+
+# Frontend/build artifacts for later phases.
+node_modules/
+dist/
+build/
+target/
