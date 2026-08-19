@@ -22,6 +22,10 @@ class Settings(BaseSettings):
     llm_base_url: str = "http://127.0.0.1:8080/v1"
     llm_model: str = "local-model"
 
+    # RAG Configuration
+    rag_embedding_model: str = "all-MiniLM-L6-v2"
+    rag_top_k: int = 5
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

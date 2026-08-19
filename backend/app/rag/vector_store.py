@@ -56,6 +56,9 @@ class VectorStore:
     async def clear_collection(self, collection: str) -> None:
         raise NotImplementedError
 
+    async def get_existing_ids(self, collection: str, ids: list[str]) -> set[str]:
+        raise NotImplementedError
+
 
 class ChromaVectorStore(VectorStore):
     """Persistent local ChromaDB implementation."""
@@ -148,11 +151,15 @@ class ChromaVectorStore(VectorStore):
         try:
             self.client.delete_collection(collection)
         except Exception as error:
-            # Chroma raises when a collection does not exist; clearing an empty
-            # collection is intentionally idempotent.
             if "not found" not in str(error).lower():
                 raise
 
+    async def get_existing_ids(self, collection: str, ids: list[str]) -> set[str]:
+        if not ids:
+            return set()
+        chroma_collection = self._get_collection(collection)
+        result = chroma_collection.get(ids=ids, include=[])
+        return set(result.get("ids", []))
     @staticmethod
     def _clean_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
         return {

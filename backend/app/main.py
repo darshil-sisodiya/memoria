@@ -30,7 +30,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     configure_logging(app_settings.log_level)
     logger = get_logger(__name__)
     engine = create_db_engine(app_settings.database_url)
-    embedding_provider = MockEmbeddingProvider()
+    from backend.app.rag.real_embeddings import SentenceTransformerEmbeddingProvider
+    embedding_provider = SentenceTransformerEmbeddingProvider(app_settings.rag_embedding_model)
     vector_store = ChromaVectorStore(app_settings.chroma_path)
 
     @asynccontextmanager

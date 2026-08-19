@@ -9,12 +9,12 @@ The core philosophy of Memoria AI is **local-first** and **privacy-first**:
 - Inference is handled locally by `llama-server` running outside of the Memoria application.
 - Memoria communicates with the local model over localhost.
 - SQLite is the current source of truth for all imported messages and conversational data.
-- ChromaDB semantic retrieval and memory extraction are planned/future work.
-- **No cloud inference or telemetry is used** for the current local LLM path.
+- ChromaDB handles vector embeddings for semantic retrieval. Durable memory extraction is planned for future work.
+- **No cloud inference or telemetry is used** for the current local LLM path or embeddings.
 
 ## Current Architecture
 
-The current implementation bridges WhatsApp chat preservation with basic local LLM inference. These two pathways (WhatsApp importing and LLM interaction) are fully functional independently, but are not yet fully connected via RAG.
+The current implementation bridges WhatsApp chat preservation with local LLM inference via a working Retrieval-Augmented Generation (RAG) pipeline.
 
 ```text
                     MEMORIA
@@ -30,7 +30,6 @@ The current implementation bridges WhatsApp chat preservation with basic local L
                 v
              SQLite
                 |
-                |       FUTURE
                 |-----> Embeddings
                 |          |
                 |          v
@@ -38,8 +37,8 @@ The current implementation bridges WhatsApp chat preservation with basic local L
                 |          |
                 |          v
                 |       Retrieval
-                |
-                |
+                |          |
+                |          v
 Memoria API ---> LocalLlamaProvider
                        |
                        | HTTP
@@ -168,7 +167,7 @@ Memoria currently exposes a development chat endpoint (`POST /api/chat`) that ca
 ```
 6. Inspect the generated response. 
 
-*Note: This endpoint currently only forwards the supplied messages to the configured local LLM provider. It does NOT perform memory retrieval or RAG integration yet.*
+*Note: Setting `"use_memory": true` in the JSON payload triggers the Retrieval-Augmented Generation (RAG) pipeline. This retrieves relevant historical conversation chunks from ChromaDB and injects them into the system prompt for the local LLM. If `false` or omitted, it forwards the messages directly to the LLM without retrieval.*
 
 ## WhatsApp Importer
 
@@ -235,29 +234,30 @@ The resulting fine-tuned model was exported to GGUF format and is successfully b
 python -m pytest backend/tests -q
 ```
 
-**Current verified state (25 tests total):**
+**Current verified state (32 tests total):**
 - WhatsApp parser tests: 6/6 pass
 - LocalLlamaProvider tests pass
-- Full Memoria test suite: 25/25 pass
+- RAG pipeline tests (chunking, indexing, retrieval, context generation): pass
+- Full Memoria test suite: 32/32 pass
 - ImportService successfully imports all records cleanly to SQLite
-- Local inference integration has been manually verified through `/api/chat`
+- Local inference integration with dynamic memory retrieval has been verified through `/api/chat`
 
 ## Embeddings and ChromaDB
 
-The backend keeps SQLite as the source of truth. A local `MockEmbeddingProvider` creates deterministic vectors for development, and `ChromaVectorStore` persists them under `storage/chroma` with telemetry disabled.
+The backend keeps SQLite as the primary source of truth. The application uses `sentence-transformers/all-MiniLM-L6-v2` locally via the `SentenceTransformerEmbeddingProvider` to create embeddings, and `ChromaVectorStore` persists them under `storage/chroma` with telemetry disabled. No cloud AI service is used.
 
-Messages are stored in the `messages` collection and memories in the `memories` collection. Each vector includes SQLite references such as `source_type`, `source_id`, `person_id`, and `timestamp`.
+### Reindexing & Chunking
+Rather than embedding single messages, historical WhatsApp conversations are intelligently chunked using `ConversationChunker`. The chunker groups continuous blocks of conversation together up to a ~3,000 character maximum, enforcing a 30-minute idle boundary between separate conversation chunks.
 
-The mock provider can later be replaced by a local embedding model without changing the import, memory, or retrieval services. No cloud AI service or telemetry is used.
+To batch-process and index an imported WhatsApp export from SQLite to ChromaDB, use the indexing script:
+```powershell
+python backend/scripts/reindex.py
+```
 
 ## Roadmap & Planned Features
 
 The following features are **FUTURE/PLANNED** work and are not currently implemented:
-- Connecting WhatsApp memories to chat generation
-- Real embedding pipeline
-- ChromaDB semantic retrieval
 - Memory extraction
-- Context builder (combining retrieved memories with recent conversation)
 - Automatic model management
 - Desktop frontend
 - Mobile application
