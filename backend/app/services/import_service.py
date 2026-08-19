@@ -54,36 +54,10 @@ class ImportService:
             for item in parsed.messages
         ]
         saved_messages = self.messages.add_many(session, messages, commit=False)
-        vector_ids = [f"message:{message.id}" for message in saved_messages]
         try:
-            if saved_messages:
-                if self.embedding_provider is None or self.vector_store is None:
-                    raise RuntimeError("Embedding and vector-store providers are required for imports")
-                embeddings = await self.embedding_provider.embed_batch(
-                    [f"{message.sender}: {message.content}" for message in saved_messages]
-                )
-                await self.vector_store.add_documents(
-                    "messages",
-                    [
-                        VectorDocument(
-                            id=f"message:{message.id}",
-                            content=f"{message.sender}: {message.content}",
-                            metadata={
-                                "source_type": "message",
-                                "source_id": message.id,
-                                "person_id": message.person_id,
-                                "timestamp": message.timestamp.isoformat() if message.timestamp else None,
-                            },
-                        )
-                        for message in saved_messages
-                    ],
-                    embeddings,
-                )
             session.commit()
         except Exception:
             session.rollback()
-            if vector_ids and self.vector_store is not None:
-                await self.vector_store.delete("messages", vector_ids)
             raise
 
         import_id: UUID = uuid4()
